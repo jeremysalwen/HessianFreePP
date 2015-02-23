@@ -1,0 +1,275 @@
+#LyX 2.0 created this file. For more info see http://www.lyx.org/
+\lyxformat 413
+\begin_document
+\begin_header
+\textclass article
+\use_default_options true
+\maintain_unincluded_children false
+\language english
+\language_package default
+\inputencoding auto
+\fontencoding global
+\font_roman default
+\font_sans default
+\font_typewriter default
+\font_default_family default
+\use_non_tex_fonts false
+\font_sc false
+\font_osf false
+\font_sf_scale 100
+\font_tt_scale 100
+
+\graphics default
+\default_output_format default
+\output_sync 0
+\bibtex_command default
+\index_command default
+\paperfontsize default
+\use_hyperref false
+\papersize default
+\use_geometry false
+\use_amsmath 1
+\use_esint 1
+\use_mhchem 1
+\use_mathdots 1
+\cite_engine basic
+\use_bibtopic false
+\use_indices false
+\paperorientation portrait
+\suppress_date false
+\use_refstyle 1
+\index Index
+\shortcut idx
+\color #008000
+\end_index
+\secnumdepth 3
+\tocdepth 3
+\paragraph_separation indent
+\paragraph_indentation default
+\quotes_language english
+\papercolumns 1
+\papersides 1
+\paperpagestyle default
+\tracking_changes false
+\output_changes false
+\html_math_output 0
+\html_css_as_file 0
+\html_be_strict false
+\end_header
+
+\begin_body
+
+\begin_layout Standard
+When computing the conjuagate gradient iteration as part of hessian-free
+ optimization, formulas become ambiguous due to the fact that you use one
+ subset of the data to calculate hessian-vector products, and another to
+ calculate the gradient.
+ This document should precisely document what is going on.
+ It will assume you are familiar with the linear CG algorithm.
+ Much thanks to Jonathan Shewchuk's 
+\begin_inset Quotes eld
+\end_inset
+
+An Introduction to the Conjugate Gradient Method Without the Agonizing Pain
+\begin_inset Quotes erd
+\end_inset
+
+.
+\end_layout
+
+\begin_layout Section*
+Problem setup
+\end_layout
+
+\begin_layout Standard
+We are attempting to minimize the function 
+\begin_inset Formula 
+\[
+f\left(x\right)=\frac{1}{2}x^{\top}Ax-b^{\top}x
+\]
+
+\end_inset
+
+Where 
+\begin_inset Formula $A$
+\end_inset
+
+ will be given by the hessian of our function, and 
+\begin_inset Formula $b$
+\end_inset
+
+ the gradient.
+\end_layout
+
+\begin_layout Section*
+Basic formulas
+\end_layout
+
+\begin_layout Subsection*
+Residual
+\end_layout
+
+\begin_layout Standard
+The residual (the negative gradient) will be denoted by 
+\begin_inset Formula $r_{i}$
+\end_inset
+
+.
+ Taking the derivative of 
+\begin_inset Formula $f\left(x\right)$
+\end_inset
+
+ we get 
+\begin_inset Formula 
+\[
+r_{i}=b-Ax_{i}
+\]
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Standard
+This however, is not the formula used to compute 
+\begin_inset Formula $r_{i}$
+\end_inset
+
+, except for the first iteration.
+ We instead derive a recursive formula later to update 
+\begin_inset Formula $r$
+\end_inset
+
+ incrementally based on the curvature.
+ We do this to eliminate the extra matrix multiplication 
+\begin_inset Formula $Ax_{i}$
+\end_inset
+
+ each iteration.
+\end_layout
+
+\begin_layout Subsection*
+Exact line search
+\end_layout
+
+\begin_layout Standard
+To perform an exact line search of our quadratic function starting at a
+ point 
+\begin_inset Formula $x_{i}$
+\end_inset
+
+ in direction 
+\begin_inset Formula $d_{i}$
+\end_inset
+
+, we choose a step-size 
+\begin_inset Formula $\alpha_{i}$
+\end_inset
+
+ to minimize the function 
+\begin_inset Formula $f\left(x_{i}+\alpha_{i}d_{i}\right)$
+\end_inset
+
+ w.r.t.
+ 
+\begin_inset Formula $\alpha_{i}$
+\end_inset
+
+.
+ 
+\end_layout
+
+\begin_layout Standard
+\begin_inset Formula 
+\begin{align*}
+f\left(x_{i}+\alpha_{i}d_{i}\right) & =\frac{1}{2}\left(x_{i}+\alpha_{i}d_{i}\right)^{\top}A\left(x_{i}+\alpha_{i}d_{i}\right)-b^{\top}\left(x_{i}+\alpha_{i}d_{i}\right)\\
+ & =f\left(x_{i}\right)+\alpha_{i}x_{i}^{\top}Ad_{i}+\frac{1}{2}\alpha_{i}^{2}d_{i}^{\top}Ad_{i}-\alpha_{i}b^{\top}d_{i}
+\end{align*}
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Standard
+At the minimum, the derivative will be zero, so
+\end_layout
+
+\begin_layout Standard
+\begin_inset Formula 
+\begin{align*}
+\frac{d}{d\alpha_{i}}f\left(x_{i}+\alpha_{i}d_{i}\right)=0 & =x_{i}^{\top}Ad_{i}+\alpha_{i}d_{i}^{\top}Ad_{i}-b^{\top}d_{i}\\
+\alpha_{i}d_{i}^{\top}Ad_{i} & =b^{\top}d_{i}-x_{i}^{\top}Ad_{i}\\
+\alpha_{i} & =\frac{b^{\top}d_{i}-x_{i}^{\top}Ad_{i}}{d_{i}^{\top}Ad_{i}}
+\end{align*}
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Standard
+Here again, we use a different formula in the actual calculation.
+ We note that we can calculate 
+\begin_inset Formula $\alpha_{i}$
+\end_inset
+
+ based on 
+\begin_inset Formula $r_{i}$
+\end_inset
+
+ instead of 
+\begin_inset Formula $x_{i}$
+\end_inset
+
+ by substituting it into the formula.
+ This is the one used in code.
+\end_layout
+
+\begin_layout Standard
+\begin_inset Formula 
+\[
+\boxed{\alpha_{i}=\frac{r_{i}^{T}Ad_{i}}{d_{i}^{\top}Ad_{i}}}
+\]
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Section*
+Initial iteration
+\end_layout
+
+\begin_layout Standard
+On the first iteration, we have a starting point 
+\begin_inset Formula $x_{0}=\mathbf{0}$
+\end_inset
+
+.
+ For the first iteration, we set the search direction 
+\begin_inset Formula $d_{0}$
+\end_inset
+
+to just be the residual.
+ This yields the following equations
+\end_layout
+
+\begin_layout Standard
+\begin_inset Formula 
+\[
+\begin{array}{c}
+\boxed{x_{0}=\mathbf{0}}\\
+\boxed{r_{0}=b-Ax_{0}}\\
+\boxed{d_{0}=r_{0}}\\
+\boxed{\alpha_{0}=\frac{r_{0}^{T}d_{0}}{d_{i}^{\top}Ad_{i}}}
+\end{array}
+\]
+
+\end_inset
+
+
+\end_layout
+
+\end_body
+\end_document

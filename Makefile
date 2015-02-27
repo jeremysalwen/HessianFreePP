@@ -1,5 +1,5 @@
-CXXFLAGS+=-Iinclude -std=c++11 -Wall `pkg-config --cflags adolc`
-LDFLAGS+= -larmadillo `pkg-config --libs adolc`
+CXXFLAGS+=-g -O3 -Iinclude -std=c++11 -Wall `pkg-config --cflags adolc sdl`
+LDFLAGS+= -g -O3 -larmadillo `pkg-config --libs adolc sdl`
 all: TestConjGrad TestMnist
 
 TestConjGrad: src/Optimizable.o test/testconjgrad.o

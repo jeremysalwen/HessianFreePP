@@ -9,29 +9,32 @@
 
 #include <SDL/SDL.h>
 
+inline double normalize_raw_image(uint8_t pix) {
+  return ((double)(pix))/UINT8_MAX;
+}
+
+inline std::vector<double> normalize_raw_image(const std::vector<uint8_t>& img) {
+  std::vector<double> o(img.size());
+  for(uint32_t i=0; i<img.size(); i++) {
+    o[i]=normalize_raw_image(img[i]);
+  }
+  return std::move(o);
+}
+
+void draw_digit(SDL_Surface* screen, int x, int y, const std::vector<uint8_t>& in);
 
 class ThreeLayerClassifier {
 public:
   ThreeLayerClassifier(uint8_t numclasses, uint32_t imagesize):numclasses(numclasses), imagesize(imagesize),weights(imagesize*imagesize*2+imagesize*numclasses) {
 		
   }
+  SDL_Surface* screen;
   std::mt19937 engine;
   bool trace_created=false;
   uint8_t numclasses;
   uint32_t imagesize;
   std::vector<double> weights; //flattened list of neuron weights, with inputs grouped together
 	
-  inline double normalize_raw_image(uint8_t pix) {
-    return ((double)(pix))/UINT8_MAX;
-  }
-	
-  inline std::vector<double> normalize_raw_image(const std::vector<uint8_t>& img) {
-    std::vector<double> o(imagesize);
-    for(uint32_t i=0; i<imagesize; i++) {
-      o[i]=normalize_raw_image(img[i]);
-    }
-    return std::move(o);
-  }
 
   template <typename ftype>
   inline ftype activation_function (ftype x) {
@@ -51,7 +54,7 @@ public:
     }
   }
   void getNNOutputs(std::vector<double>& out,const std::vector<uint8_t>& in, bool dropout) {
-    getNNOutputs(weights,out,normalize_raw_image(in), dropout);
+    //    getNNOutputs(weights,out,normalize_raw_image(in), dropout);
   }
 
   void addRegularization(double& out, std::vector<double>& gradout, double strength) {
@@ -85,7 +88,7 @@ public:
       trace_created=true;
     } else {
       std::vector<double> outvec(numclasses);
-      getNNOutputs(weights,outvec,inputs, dropout);
+      //getNNOutputs(weights,outvec,inputs, dropout);
       out=outvec[correct_label];
     } 
     gradient(tag,  weights.size(), weights.data(), gradout.data());
@@ -104,7 +107,12 @@ private:
       }
       layer1[l1]=activation_function(layer1[l1]);
     }
-
+    std::vector<uint8_t> to_display(imagesize);
+    for(unsigned int i=0; i<imagesize; i++) {
+      to_display[i]=layer1[i].value()*1000+127.0;
+    }
+    draw_digit(screen,0,28,to_display);
+    
     int32_t weightsind=imagesize*imagesize; //The start of the weights for this layer
     std::vector<ftype> layer2(imagesize);
     for(uint32_t l2=0; l2<imagesize; l2++) {
@@ -115,6 +123,11 @@ private:
       }	
       layer2[l2]=activation_function(layer2[l2]);
     }
+
+    for(unsigned int i=0; i<imagesize; i++) {
+      to_display[i]=layer2[i].value()*1000+127.0;
+    }
+    draw_digit(screen,28,28,to_display);
 		
     ftype sumout=0;
     weightsind=2*imagesize*imagesize;
@@ -129,6 +142,11 @@ private:
     sumout=log(sumout);
     for(uint32_t l3=0; l3<numclasses; l3++) {
       out[l3]-=sumout;
+      uint8_t val=exp(out[l3].value())*255;
+      for(unsigned int i=0; i<imagesize; i++) {
+	to_display[i]=val;
+      }
+      draw_digit(screen, 56+l3*28, 28, to_display);
     }
   } 
 };
@@ -144,7 +162,7 @@ void draw_weights(SDL_Surface* screen, int y, std::vector<double>& weights) {
 
 
   int slot=0;
-  int maxslot=28*28*2;
+  int maxslot=28*28*2+10;
   for(int bw=0; bw<nwide; bw++) {
     for(int bh=0; bh<ntall; bh++) {
       for(int px=0; px<28; px++) {
@@ -201,6 +219,7 @@ int main(int argc, char** argv) {
 
   mnist::MNIST_dataset<> dataset=mnist::read_dataset();
   ThreeLayerClassifier classifier(10,dataset.rows*dataset.columns);
+  classifier.screen=screen;
   classifier.randomly_initialize();
   double output=0;
   std::vector<double> grad(classifier.weights.size());
@@ -219,7 +238,7 @@ int main(int argc, char** argv) {
 
     std::cout<<"\nTrain iteration "<<i<<"\n";
 
-   draw_weights(screen, 28, classifier.weights);
+   draw_weights(screen, 56, classifier.weights);
 
     double total_prob=0;
     std::vector<double> total_grad(classifier.weights.size());
@@ -227,7 +246,9 @@ int main(int argc, char** argv) {
     for(int batch=0; batch<BATCH_SIZE; batch++) {
       std::cout <<"\nBatch entry "<<batch<<"\n";
       uint32_t sample=uint_dist10(engine);
-      draw_digit(screen, 0, 0, dataset.training_images[sample]);
+      SDL_Rect rect = {0,0,28*12,28};
+      SDL_FillRect(screen, &rect, 0);
+      draw_digit(screen, 56+28*dataset.training_labels[sample], 0, dataset.training_images[sample]);
       
       std::cout<<"Image "<<sample<<"\n";
       classifier.getNNOutputAndGrad(output,grad,dataset.training_labels[sample], dataset.training_images[sample],true);
@@ -239,8 +260,8 @@ int main(int argc, char** argv) {
       total_prob+=exp(output);
       std::transform(total_grad.begin(), total_grad.end(), grad.begin(), total_grad.begin(),
 		     std::plus<double>());
+      draw_weights(screen, 56, grad);
     }
-    // draw_weights(gradscreen, 28, total_grad);
 
     std::cout <<"Total Prob " << total_prob <<"\n";
     double gradtotal = sqrt(inner_product(total_grad.begin(), total_grad.end(), total_grad.begin(), 0.0));

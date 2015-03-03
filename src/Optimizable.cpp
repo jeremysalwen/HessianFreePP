@@ -1,5 +1,3 @@
-#include <cstdlib>
-#include <armadillo>
 #include <algorithm>
 
 #include "Optimizable.hpp"

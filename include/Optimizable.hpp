@@ -1,3 +1,8 @@
+#ifndef OPTIMIZABLE_HPP
+#define OPTIMIZABLE_HPP
+
+#include <cstdlib>
+#include <armadillo>
 class Optimizable {
 public:
 	virtual size_t numParameters()=0;
@@ -20,3 +25,5 @@ HessianFreeOptimizer(unsigned int miniters=1,	unsigned int maxiters=250, unsigne
 	
 void HessianFreeIteration(Optimizable& optim, arma::vec& x0);
 };
+
+#endif

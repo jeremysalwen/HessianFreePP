@@ -1,4 +1,5 @@
--std=c++11 -Iinclude
+-std=c++11
+-Iinclude
 
 
 

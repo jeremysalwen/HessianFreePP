@@ -9,6 +9,25 @@
 
 #include <SDL/SDL.h>
 
+// Usable AlmostEqual function    
+bool AlmostEqual2sComplement(float A, float B, int maxUlps)    
+{    
+    // Make sure maxUlps is non-negative and small enough that the    
+    // default NAN won't compare as equal to anything.    
+  //assert(maxUlps > 0 && maxUlps < 4 * 1024 * 1024);    
+    int aInt = *(int*)&A;    
+    // Make aInt lexicographically ordered as a twos-complement int    
+    if (aInt < 0)    
+        aInt = 0x80000000 - aInt;    
+    // Make bInt lexicographically ordered as a twos-complement int    
+    int bInt = *(int*)&B;    
+    if (bInt < 0)    
+        bInt = 0x80000000 - bInt;    
+    int intDiff = abs(aInt - bInt);    
+    if (intDiff <= maxUlps)    
+        return true;    
+    return false;    
+}
 inline double normalize_raw_image(uint8_t pix) {
   return ((double)(pix))/UINT8_MAX;
 }
@@ -46,7 +65,6 @@ public:
     layer3bmask(dropout_mask.memptr()+(2*imagesize+numclasses+2)*imagesize,numclasses,false)
     
   {
-    engine.seed(100);
     clear_dropout_mask();
   }
 
@@ -78,8 +96,9 @@ public:
   void generate_new_dropout_mask() {
     std::bernoulli_distribution dropout_dist(0.5);
     
-    auto generator = std::bind(dropout_dist, engine);
+    auto generator = std::bind(dropout_dist, std::ref(engine));
     std::generate(dropout_mask.begin(), dropout_mask.end(), generator ); 
+ 
   }
 
   void clear_dropout_mask() {
@@ -92,11 +111,16 @@ public:
   }
 
   inline double activation_derivative(double x) {
-    double tmp=1+exp(-x);
-    return exp(-x)/(tmp*tmp);
+    double t=exp(-x);
+    double tmp=1+t;
+    return t/(tmp*tmp);
+  }
+  inline arma::vec activation_derivative(arma::vec v) {
+    arma::vec tmp=exp(-v);
+    return tmp / ((1+tmp) %(1+tmp));
   }
   void randomly_initialize() {
-  
+    engine.seed(100);
     double NUMCONNECT=15.0;
     std::bernoulli_distribution selection_dist(NUMCONNECT/imagesize);
     std::normal_distribution<double> weight_dist(0.0,1.0/sqrt(NUMCONNECT));
@@ -169,30 +193,16 @@ public:
     arma::vec layer1=tanh(layer1pre_activation/2)/2;
    
     
-    arma::vec layer2pre_activation=(layer2weights % layer2mask).t()*inputs;//+ (layer2biases % layer2bmask);
+    arma::vec layer2pre_activation=(layer2weights % layer2mask).t()*layer1+ (layer2biases % layer2bmask);
     arma::vec layer2=tanh(layer2pre_activation/2)/2;
 
-    std::cout <<"Mask "<<layer2mask(0,2)<<"\n";
-    /*   arma::mat m=(layer2weights % layer2mask);
-      std::cout<<dot(m.col(1),inputs)<<"\n";
-      for(int i=0; i<imagesize; i++) {
-	if(m.at(i,0)) 
-	  for(int j=0; j<imagesize; j++) {
-	    if(layer1[j]) {
-	      std::cout <<"BANG "<<i<<", "<<j<<"\n";
-	      break;
-	    }
-	  } 
 
-	  break;
-	}
-	}*/
-
- std::cout << "L2arma"<<layer2pre_activation[0]<<"\n";
-    arma::mat wut=(layer3weights % layer3mask).t();
-    wut.reshape(10, imagesize);
-   
-    arma::vec layer3= wut*inputs+(layer3biases % layer3bmask);
+    arma::mat wut=(layer3weights % layer3mask);
+    wut.reshape(imagesize,10);
+  
+    arma::vec layer3= wut.t()*layer2+(layer3biases % layer3bmask);
+ 
+    
     double sumout=arma::accu(exp(layer3)); 
     double logsumout=log(sumout);
     
@@ -200,24 +210,32 @@ public:
     
     std::fill(gradout.begin(),gradout.end(),0.0f);
 
-    arma::vec l3grad=-exp(layer3/sumout);
+    arma::vec l3grad=-exp(layer3)/sumout;
     l3grad[correct_label]+=1;
+
+  
+    arma::mat l=(layer2*l3grad.t());
+    l.reshape(numclasses, imagesize);
+    layer3gradout=l% layer3mask;
+    layer3bgradout=l3grad %layer3bmask;
 
     arma::mat n=(layer3weights % layer3mask);
     n.reshape(784,10);
+
     arma::vec l2grad=n* l3grad;
-    arma:: mat gra333=l3grad*layer2.t();
-  
-    layer3gradout=layer2*l3grad.t();
-    layer3bgradout=l3grad %layer3bmask;
-    
-    arma::vec l1grad=(layer2weights % layer2mask)*l2grad;
-    layer2gradout=l2grad*layer1.t();
-    layer2bgradout=l2grad% layer2bmask;
-    
-    layer1gradout=inputs*l1grad.t();
-    layer1bgradout=l1grad %layer2bmask;
-    
+    arma::vec l2pre_grad=l2grad % activation_derivative(layer2pre_activation);
+    arma::vec l1grad=(layer2weights % layer2mask)*l2pre_grad;
+    layer2gradout=(layer1*l2pre_grad.t()) % layer2mask;
+    layer2bgradout=l2pre_grad% layer2bmask;
+
+    arma::vec l1pre_grad=l1grad % activation_derivative(layer1pre_activation);
+    layer1gradout=(inputs*l1pre_grad.t()) %layer1mask;
+    layer1bgradout=l1pre_grad %layer1bmask;
+ 
+    //std::cout << "L3arma"<<layer3gradout[1]<<"\n";
+
+
+
     addRegularization(out, gradout, 0.0);
   }
 
@@ -252,28 +270,21 @@ public:
     uint32_t l2weightsind=imagesize*imagesize; //The start of the weights for this layer
     std::vector<double> layer2(imagesize);
     std::vector<double> layer2pre_activation(imagesize);
-    bool b=true;
+
     for(uint32_t l2=0; l2<imagesize; l2++) {
       for(uint32_t l1=0; l1<imagesize; l1++) {
 	uint32_t wi=l2weightsind+l2*imagesize+l1;
-	if(l1==2 && l2==0) {
-	  std::cout<<"MASKED "<<dropout_mask[wi]<<"\n";
-	}
+
 	if(dropout_mask[wi]) {
-	  if(weights[wi]&& layer1[l1] && b) {
-	    std::cout <<"BLA "<<l2<<", "<<l1<<"\n";
-	    std::cout<<"ERG "<<weights[wi]<<"\n";
-	    b=false;
-	  }
 	  layer2pre_activation[l2]+=layer1[l1]*weights[wi];
 	}
       }
       if(dropout_mask[bias_ind+imagesize+l2]) {
-	//		layer2pre_activation[l2]+=weights[bias_ind+imagesize+l2];
+	layer2pre_activation[l2]+=weights[bias_ind+imagesize+l2];
       }
       layer2[l2]=activation_function(layer2pre_activation[l2]);
     }
-  std::cout << "L2hand"<<layer2pre_activation[0]<<"\n";
+
     /*
     for(unsigned int i=0; i<imagesize; i++) {
       to_display[i]=layer2[i]*1000+127.0;
@@ -283,6 +294,8 @@ public:
     std::vector<double> layer3(numclasses);
     double sumout=0;
     uint32_t l3weightsind=2*imagesize*imagesize;
+
+
     for(uint32_t l3=0; l3<numclasses; l3++) {
       for(uint32_t l2=0; l2<imagesize; l2++) {
 	uint32_t wi=l3weightsind+l3*imagesize+l2;
@@ -291,10 +304,11 @@ public:
 	}
       }
       if(dropout_mask[bias_ind+2*imagesize+l3]) {
-	layer3[l3]+=weights[bias_ind+2*imagesize+l3];
+		layer3[l3]+=weights[bias_ind+2*imagesize+l3];
       }
       sumout+=exp(layer3[l3]);
     }
+
     double logsumout=log(sumout);
     /*
     for(uint32_t l3=0; l3<numclasses; l3++) {
@@ -316,6 +330,8 @@ public:
     }
     l3grad[correct_label]+=1;
 
+
+
     std::vector<double> l2grad(imagesize);
     for(uint32_t l3=0; l3<numclasses; l3++) {
       for(uint32_t l2=0; l2<imagesize; l2++) {
@@ -329,8 +345,8 @@ public:
 	gradout[bias_ind+imagesize*2+l3]=l3grad[l3];
       }
     }
-
-  
+    // std::cout << "L3hand"<<gradout[l3weightsind+1]<<"\n";    
+ 
     std::vector<double> l1grad(imagesize);
     for(uint32_t l2=0; l2<imagesize; l2++) {
       double l2activation_grad=l2grad[l2]*activation_derivative(layer2pre_activation[l2]);
@@ -342,11 +358,10 @@ public:
 	}
       }
       if(dropout_mask[bias_ind+imagesize+l2]) {
-	gradout[bias_ind+imagesize+l2]=l2grad[l2];
+	gradout[bias_ind+imagesize+l2]=l2activation_grad;
       }
     }
- 
-    for(uint32_t l1=0; l1<imagesize; l1++) {
+     for(uint32_t l1=0; l1<imagesize; l1++) {
       double l1activation_grad=l1grad[l1]*activation_derivative(layer1pre_activation[l1]);
       for(uint32_t l0=0; l0<imagesize; l0++) {
 	uint32_t wi=l1*imagesize+l0;
@@ -356,10 +371,13 @@ public:
        	}
       }
       if(dropout_mask[bias_ind+l1]) {
-	gradout[bias_ind+l1]=l1grad[l1];
+	gradout[bias_ind+l1]=l1activation_grad;
       }
     }
     
+
+
+ 
     addRegularization(out, gradout, 0.0);
   }
 
@@ -511,7 +529,7 @@ int main(int argc, char** argv) {
   mnist::MNIST_dataset<> dataset=mnist::read_dataset();
   ThreeLayerClassifier classifier(10,dataset.rows*dataset.columns);
   classifier.screen=screen;
-  classifierly_initialize();
+  classifier.randomly_initialize();
   double output=0;
   arma::vec grad(classifier.weights.size());
 
@@ -556,8 +574,12 @@ int main(int argc, char** argv) {
       arma::vec og(grad.size());
       double oout;
       classifier.handCodedOutputAndGrad(oout, og, dataset.training_labels[sample],dataset.training_images[sample]);
-      
-      std::cout <<"COMPARE "<<output<<", "<<oout<<"\n";
+
+      for(int j=0; j<28*28*28*28*2+28*28*10; j++) {
+	if(!AlmostEqual2sComplement(grad[j], og[j], 4)) {
+	   std::cout <<j<<", "<<"COMPARE "<<grad[j]<<", "<<og[j]<<"\n";
+	}
+      }
       //std::cout <<"Correct answer " << (int)dataset.training_labels[sample] <<"\n";
       //std::cout <<"Output Prob " << output<<"\n";
 

@@ -189,20 +189,15 @@ public:
     arma::vec layer2bgradout(gradout.memptr()+(2*imagesize+numclasses+1)*imagesize,imagesize,false);
     arma::mat layer3bgradout(gradout.memptr()+(2*imagesize+numclasses+2)*imagesize,imagesize,false);
     
-    arma::vec layer1pre_activation=(layer1weights % layer1mask).t()*inputs + (layer1biases % layer1bmask);
+    arma::vec layer1pre_activation=(layer1weights % layer1mask)*inputs + (layer1biases % layer1bmask);
     arma::vec layer1=tanh(layer1pre_activation/2)/2;
    
     
-    arma::vec layer2pre_activation=(layer2weights % layer2mask).t()*layer1+ (layer2biases % layer2bmask);
+    arma::vec layer2pre_activation=(layer2weights % layer2mask)*layer1+ (layer2biases % layer2bmask);
     arma::vec layer2=tanh(layer2pre_activation/2)/2;
 
-
-    arma::mat wut=(layer3weights % layer3mask);
-    wut.reshape(imagesize,10);
-  
-    arma::vec layer3= wut.t()*layer2+(layer3biases % layer3bmask);
- 
-    
+    arma::vec layer3= (layer3weights % layer3mask)*layer2+(layer3biases % layer3bmask);
+     
     double sumout=arma::accu(exp(layer3)); 
     double logsumout=log(sumout);
     
@@ -213,23 +208,20 @@ public:
     arma::vec l3grad=-exp(layer3)/sumout;
     l3grad[correct_label]+=1;
 
-  
-    arma::mat l=(layer2*l3grad.t());
-    l.reshape(numclasses, imagesize);
-    layer3gradout=l% layer3mask;
+    layer3gradout=(l3grad*layer2.t()) % layer3mask;
     layer3bgradout=l3grad %layer3bmask;
 
     arma::mat n=(layer3weights % layer3mask);
     n.reshape(784,10);
 
-    arma::vec l2grad=n* l3grad;
+    arma::vec l2grad=(layer3weights % layer3mask).t() * l3grad;
     arma::vec l2pre_grad=l2grad % activation_derivative(layer2pre_activation);
-    arma::vec l1grad=(layer2weights % layer2mask)*l2pre_grad;
-    layer2gradout=(layer1*l2pre_grad.t()) % layer2mask;
+    arma::vec l1grad=(layer2weights % layer2mask).t()*l2pre_grad;
+    layer2gradout=(l2pre_grad*layer1.t()) % layer2mask;
     layer2bgradout=l2pre_grad% layer2bmask;
 
     arma::vec l1pre_grad=l1grad % activation_derivative(layer1pre_activation);
-    layer1gradout=(inputs*l1pre_grad.t()) %layer1mask;
+    layer1gradout=(l1pre_grad*inputs.t()) %layer1mask;
     layer1bgradout=l1pre_grad %layer1bmask;
  
     //std::cout << "L3arma"<<layer3gradout[1]<<"\n";
@@ -564,22 +556,22 @@ int main(int argc, char** argv) {
       //std::cout <<"\nBatch entry "<<batch<<"\n";
       uint32_t sample=uint_dist10(engine);
       SDL_Rect rect = {0,0,28*12,28};
-      if(batch%50==0) {
+      //if(batch%50==0) {
 	SDL_FillRect(screen, &rect, 0);
 	draw_digit(screen, 56+28*dataset.training_labels[sample], 0, dataset.training_images[sample]);
-      }
+	//}
       //std::cout<<"Image "<<sample<<"\n";
       classifier.generate_new_dropout_mask();
-      classifier.armadilloOutputAndGrad(output,grad, dataset.training_labels[sample],dataset.training_images[sample]);
-      arma::vec og(grad.size());
-      double oout;
-      classifier.handCodedOutputAndGrad(oout, og, dataset.training_labels[sample],dataset.training_images[sample]);
-
+      //classifier.armadilloOutputAndGrad(output,grad, dataset.training_labels[sample],dataset.training_images[sample]);
+      //arma::vec og(grad.size());
+      //double oout;
+       classifier.handCodedOutputAndGrad(output, grad, dataset.training_labels[sample],dataset.training_images[sample]);
+      /*
       for(int j=0; j<28*28*28*28*2+28*28*10; j++) {
 	if(!AlmostEqual2sComplement(grad[j], og[j], 4)) {
 	   std::cout <<j<<", "<<"COMPARE "<<grad[j]<<", "<<og[j]<<"\n";
 	}
-      }
+	}*/
       //std::cout <<"Correct answer " << (int)dataset.training_labels[sample] <<"\n";
       //std::cout <<"Output Prob " << output<<"\n";
 
@@ -653,9 +645,7 @@ int main(int argc, char** argv) {
     draw_error(screen, 1600, 0, dxhistl3,1);
 
     std::cout <<"DX "<< sqrt(total_step_size);
-    //   if(i==2) {
-    return 0;
-    //}
+
   }
   std::cout <<"Total log prob is "<< log_prob << "\n";
   double expected_log_prob=log(0.1)*TRAIN_COUNT;

@@ -9,6 +9,18 @@
 
 #include <SDL/SDL.h>
 
+#define VIENNACL_WITH_OPENC
+#include "viennacl/scalar.hpp"
+#include "viennacl/vector.hpp"
+#include "viennacl/matrix.hpp"
+
+//#include "viennacl/linalg/matrix_operations.hpp"
+//#include "viennacl/linalg/vector_operations.hpp"
+#include "viennacl/linalg/reduce.hpp"
+#include "viennacl/linalg/prod.hpp"
+
+using namespace viennacl;
+
 // Usable AlmostEqual function    
 bool AlmostEqual2sComplement(float A, float B, int maxUlps)    
 {    
@@ -78,6 +90,8 @@ public:
   arma::vec weights; //flattened list of neuron weights, with inputs grouped together
   arma::uvec dropout_mask;
 
+  double regularization_strength=0;
+
   arma::mat layer1weights;
   arma::umat layer1mask;
   arma::mat layer2weights;
@@ -92,17 +106,46 @@ public:
   arma::vec layer3biases;
   arma::uvec layer3bmask;
 
+  typedef double ScalarType;
+
+  viennacl::matrix<ScalarType,column_major> cl_layer1weights;
+  viennacl::matrix<ScalarType,column_major> cl_layer1mask;
+  viennacl::matrix<ScalarType,column_major> cl_layer2weights;
+  viennacl::matrix<ScalarType,column_major> cl_layer2mask;
+  viennacl::matrix<ScalarType,column_major> cl_layer3weights;
+  viennacl::matrix<ScalarType,column_major> cl_layer3mask;
   
+  viennacl::vector<ScalarType> cl_layer1biases;
+  viennacl::vector<ScalarType> cl_layer1bmask;
+  viennacl::vector<ScalarType> cl_layer2biases;
+  viennacl::vector<ScalarType> cl_layer2bmask;
+  viennacl::vector<ScalarType> cl_layer3biases;
+  viennacl::vector<ScalarType> cl_layer3bmask;
+
+
   void generate_new_dropout_mask() {
     std::bernoulli_distribution dropout_dist(0.5);
     
     auto generator = std::bind(dropout_dist, std::ref(engine));
-    std::generate(dropout_mask.begin(), dropout_mask.end(), generator ); 
- 
-  }
+    std::generate(dropout_mask.begin(), dropout_mask.end(), generator); 
 
+    cl_copy_dropout_masks();
+   }
+
+  void cl_copy_dropout_masks() {
+
+    //  viennacl::copy(layer1mask.begin(),layer1mask.end(),cl_layer1mask);
+    //  viennacl::copy(layer2mask.begin(),layer2mask.end(),cl_layer2mask);
+    //  viennacl::copy(layer3mask.begin(),layer3mask.end(),cl_layer3mask);
+
+    // viennacl::copy(layer1bmask.begin(),layer1bmask.end(),cl_layer1bmask);
+    // viennacl::copy(layer2bmask.begin(),layer2bmask.end(),cl_layer2bmask);
+    // viennacl::copy(layer3bmask.begin(),layer3bmask.end(),cl_layer3bmask); 
+
+  }
   void clear_dropout_mask() {
     std::fill(dropout_mask.begin(),dropout_mask.end(),true);
+    cl_copy_dropout_masks();
   }
   
   template <typename ftype>
@@ -136,11 +179,19 @@ public:
     for(unsigned i=imagesize*(imagesize*2+numclasses); i<weights.size(); i++) {
 	weights[i]=bias_dist(engine);
     }
+    copy_weights_to_opencl();  
+  }
+
+  void copy_weights_to_opencl() {
+    // viennacl::copy(layer1weights,cl_layer1weights);
+    //viennacl::copy(layer2weights,cl_layer2weights);
+    //viennacl::copy(layer3weights,cl_layer3weights);
     
+    //viennacl::copy(layer1biases,cl_layer1biases);
+    //viennacl::copy(layer2biases,cl_layer2biases);
+    //viennacl::copy(layer3biases,cl_layer3biases);
   }
-  void getNNOutputs(std::vector<double>& out,const std::vector<uint8_t>& in, bool dropout) {
-    //    getNNOutputs(weights,out,normalize_raw_image(in), dropout);
-  }
+
 
   void addRegularization(double& out, arma::vec& gradout, double strength) {
     for(uint32_t i=0; i<weights.size(); i++) {
@@ -152,31 +203,60 @@ public:
   //Use adol-c to automatically calculate gradient
   void getNNOutputAndGrad(double& out, arma::vec& gradout, uint8_t correct_label, const std::vector<uint8_t>& in) {
     std::vector<double> inputs=normalize_raw_image(in);
-    
+   
     short tag=1;
 		
-    if(true) {
-      trace_on(tag);
-      std::vector<adouble> aweights(weights.size());
-      std::vector<adouble> aout(numclasses);
-      adouble a;
-      for(uint32_t i=0; i<weights.size(); i++) {
-	aweights[i]<<=weights[i];
-      }
-      getNNOutputs(aweights,aout,inputs);
-      aout[correct_label] >>=out;
-      trace_off();
-      size_t tape_stats[STAT_SIZE];
-      tapestats(tag, tape_stats);
+    trace_on(tag);
+    std::vector<adouble> aweights(weights.size());
+    std::vector<adouble> aout(numclasses);
+    adouble a;
+    for(uint32_t i=0; i<weights.size(); i++) {
+      aweights[i]<<=weights[i];
+    }
+    getNNOutputs(aweights,aout,inputs);
+    std::cout <<"out "<<aout[correct_label]<<"\n";      		
+
+    aout[correct_label] >>=out;
+    trace_off();
+    size_t tape_stats[STAT_SIZE];
+    tapestats(tag, tape_stats);
  
-      std::cout <<"trace created "<<tape_stats[NUM_INDEPENDENTS]<< ", "<<tape_stats[NUM_DEPENDENTS]<<"\n";
-      trace_created=true;
-    } else {
-    } 
+    std::cout <<"trace created "<<tape_stats[NUM_INDEPENDENTS]<< ", "<<tape_stats[NUM_DEPENDENTS]<<"\n";
+    trace_created=true;
+
     gradient(tag,  weights.size(), weights.memptr(), gradout.memptr());
-    addRegularization(out, gradout, 10000);
+    addRegularization(out, gradout, regularization_strength);
   }
 
+  
+  void opencl_get_output_and_grad(double& out, arma::vec& gradout, uint8_t correct_lable, const std::vector<uint8_t>& in) {
+    copy_weights_to_opencl();
+
+    viennacl::vector<ScalarType> cl_in(in.size());
+    viennacl::copy(in,cl_in);
+
+    cl_in/=UINT8_MAX;
+
+    viennacl::matrix<ScalarType> cl_layer1weightsmasked=linalg::prod(cl_layer1weights,cl_layer1mask);
+    viennacl::vector<ScalarType> cl_layer1pre_activation= linalg::prod(cl_layer1weightsmasked, cl_in)
+      + linalg::element_prod(cl_layer1biases,cl_layer1bmask);
+    viennacl::vector<ScalarType> cl_layer1=linalg::element_tanh(cl_layer1pre_activation);
+
+    viennacl::matrix<ScalarType> cl_layer2weightsmasked=linalg::prod(cl_layer2weights, cl_layer2mask);
+    viennacl::vector<ScalarType> cl_layer2pre_activation=linalg::prod(cl_layer2weightsmasked, cl_layer1)
+      + linalg::element_prod(cl_layer2biases,cl_layer2bmask);
+    viennacl::vector<ScalarType> cl_layer2=linalg::element_tanh(cl_layer2pre_activation);
+
+    viennacl::matrix<ScalarType> cl_layer3weightsmasked=linalg::prod(cl_layer3weights, cl_layer3mask);
+    viennacl::vector<ScalarType> cl_layer3pre_activation=linalg::prod(cl_layer3weightsmasked, cl_layer2)
+      + linalg::element_prod(cl_layer1biases,cl_layer1bmask);
+    viennacl::vector<ScalarType> cl_layer3=linalg::element_exp(cl_layer3pre_activation);
+    
+    //    viennacl::scalar<ScalarType> sumout=linalg::reduce<op_add>(cl_layer3);
+    
+  }
+
+  
   void armadilloOutputAndGrad(double& out, arma::vec& gradout, uint8_t correct_label, const std::vector<uint8_t>& in) {
 
     arma::vec inputs=normalize_raw_image(in);
@@ -211,9 +291,6 @@ public:
     layer3gradout=(l3grad*layer2.t()) % layer3mask;
     layer3bgradout=l3grad %layer3bmask;
 
-    arma::mat n=(layer3weights % layer3mask);
-    n.reshape(784,10);
-
     arma::vec l2grad=(layer3weights % layer3mask).t() * l3grad;
     arma::vec l2pre_grad=l2grad % activation_derivative(layer2pre_activation);
     arma::vec l1grad=(layer2weights % layer2mask).t()*l2pre_grad;
@@ -228,10 +305,11 @@ public:
 
 
 
-    addRegularization(out, gradout, 0.0);
+    addRegularization(out, gradout, regularization_strength);
   }
 
   void handCodedOutputAndGrad(double& out, arma::vec& gradout, uint8_t correct_label, const std::vector<uint8_t>& in) {
+
 
     std::vector<double> inputs=normalize_raw_image(in);
 
@@ -251,7 +329,7 @@ public:
       }
       layer1[l1]=activation_function(layer1pre_activation[l1]);
     }
-  
+   
     /*
     std::vector<uint8_t> to_display(imagesize);
     for(unsigned int i=0; i<imagesize; i++) {
@@ -288,7 +366,7 @@ public:
     uint32_t l3weightsind=2*imagesize*imagesize;
 
 
-    for(uint32_t l3=0; l3<numclasses; l3++) {
+   for(uint32_t l3=0; l3<numclasses; l3++) {
       for(uint32_t l2=0; l2<imagesize; l2++) {
 	uint32_t wi=l3weightsind+l3*imagesize+l2;
 	if(dropout_mask[wi]) {
@@ -296,7 +374,7 @@ public:
 	}
       }
       if(dropout_mask[bias_ind+2*imagesize+l3]) {
-		layer3[l3]+=weights[bias_ind+2*imagesize+l3];
+	layer3[l3]+=weights[bias_ind+2*imagesize+l3];
       }
       sumout+=exp(layer3[l3]);
     }
@@ -314,6 +392,7 @@ public:
     */
 
     out=layer3[correct_label]-logsumout;
+ std::cout<<"WUT "<<out<<"\n";      
     std::fill(gradout.begin(),gradout.end(),0.0f);
     
     std::vector<double> l3grad(numclasses);
@@ -370,64 +449,83 @@ public:
 
 
  
-    addRegularization(out, gradout, 0.0);
+     addRegularization(out, gradout, regularization_strength);
   }
+  void check_grad(std::vector<uint8_t>& image, int correct_label, arma::vec& dx) {
+    double val;
+    arma::vec grad(weights.size());
+  handCodedOutputAndGrad(val, grad, correct_label, image);
 
+    double expected=arma::dot(grad,dx);
+
+    for(unsigned int i=0; i<weights.size(); i++) {
+      weights[i]+=dx[i];
+    }
+    double newval;
+   handCodedOutputAndGrad(newval, grad, correct_label, image);
+
+
+    double diff=newval-val; 
+    std::cout <<"CHANGE "<<diff<<"\n";
+    if(fabs(diff-expected)>0.01*fabs(expected)) {
+      std::cout <<"Gradient mismatch "<<expected<<", "<<(newval-val)<<"\n";
+    }
+  }
 private: 
   template <typename ftype> 
-  void getNNOutputs(std::vector<ftype>& weights, std::vector<ftype>& out,const std::vector<double>& inputs) {
+  void getNNOutputs(std::vector<ftype>& w, std::vector<ftype>& out,const std::vector<double>& inputs) {
 
+    uint32_t bias_ind=imagesize*(imagesize*2+numclasses);
+      
     std::vector<ftype> layer1(imagesize);
     for(uint32_t l1=0; l1<imagesize; l1++) {
       for(uint32_t l0=0; l0<imagesize; l0++) {
 	if(dropout_mask[l1*imagesize+l0]) {
-	  layer1[l1]+=inputs[l0]*weights[l1*imagesize+l0];
+	  layer1[l1]+=inputs[l0]*w[l1*imagesize+l0];
 	}
+      }
+      if(dropout_mask[bias_ind+l1]) {
+	layer1[l1]+=w[bias_ind+l1];
       }
       layer1[l1]=activation_function(layer1[l1]);
     }
-    std::vector<uint8_t> to_display(imagesize);
-    for(unsigned int i=0; i<imagesize; i++) {
-      to_display[i]=layer1[i].value()*1000+127.0;
-    }
-    draw_digit(screen,0,28,to_display);
-    
+
     int32_t weightsind=imagesize*imagesize; //The start of the weights for this layer
     std::vector<ftype> layer2(imagesize);
     for(uint32_t l2=0; l2<imagesize; l2++) {
       for(uint32_t l1=0; l1<imagesize; l1++) {
 	if(dropout_mask[weightsind+l2*imagesize+l1]) {
-	  layer2[l2]+=layer1[l1]*weights[weightsind+l2*imagesize+l1];
+	  layer2[l2]+=layer1[l1]*w[weightsind+l2*imagesize+l1];
 	}
-      }	
+      }
+      if(dropout_mask[bias_ind+imagesize+l2]) {
+	layer2[l2]+=w[bias_ind+imagesize+l2];
+      }
       layer2[l2]=activation_function(layer2[l2]);
     }
 
-    for(unsigned int i=0; i<imagesize; i++) {
-      to_display[i]=layer2[i].value()*1000+127.0;
-    }
-    draw_digit(screen,28,28,to_display);
-		
     ftype sumout=0;
     weightsind=2*imagesize*imagesize;
     for(uint32_t l3=0; l3<numclasses; l3++) {
+      out[l3]=0;
       for(uint32_t l2=0; l2<imagesize; l2++) {
 	if(dropout_mask[weightsind+l3*imagesize+l2]) {
-	  out[l3]+=layer2[l2]*weights[weightsind+l3*imagesize+l2];
+	  out[l3]+=layer2[l2]*w[weightsind+l3*imagesize+l2];
 	}
+      }
+      if(dropout_mask[bias_ind+imagesize*2+l3]) {
+	out[l3]+=w[bias_ind+imagesize*2+l3];
       }
       sumout+=exp(out[l3]);
     }
+
     sumout=log(sumout);
+
     for(uint32_t l3=0; l3<numclasses; l3++) {
       out[l3]-=sumout;
-      uint8_t val=exp(out[l3].value())*255;
-      for(unsigned int i=0; i<imagesize; i++) {
-	to_display[i]=val;
-      }
-      draw_digit(screen, 56+l3*28, 28, to_display);
     }
-  } 
+ }
+
 };
 
 void draw_weights(SDL_Surface* screen, int y, arma::vec& weights) {
@@ -511,6 +609,46 @@ void draw_error(SDL_Surface* screen, int x, int y, const std::vector<double>& in
       
 }
 
+void test_gradients(ThreeLayerClassifier& classifier, mnist::MNIST_dataset<>& dataset, double epsilon) {
+  std::default_random_engine rand;
+  std::uniform_int_distribution<> sample_dist(0,dataset.training_images.size()-1);
+  std::uniform_real_distribution<> dx_dist(-1,1);
+  arma::vec dx(classifier.weights.size());
+  for(int i=0; i<100; i++){
+    classifier.randomly_initialize();
+    classifier.generate_new_dropout_mask();
+    std::fill(dx.begin(),dx.end(),0.0f);
+
+    double norm=0;
+    for(unsigned int j=0; j<dx.size(); j++) {
+      dx[j]=dx_dist(rand);
+      norm+=dx[j]*dx[j];
+    }
+    norm=sqrt(norm);
+    std::cout <<"norm "<<norm<<"\n";
+    for(unsigned int j=0; j<dx.size(); j++) {
+      dx[j]/=norm;
+      dx[j]*=epsilon;
+    }
+
+    int sample=sample_dist(rand);
+    std::cout <<"sample "<<sample<<"\n";
+    classifier.check_grad(dataset.training_images[sample], dataset.training_labels[sample], dx);
+  }
+
+  for(unsigned int i=28*28*28*28*2+7840*2; i<classifier.weights.size(); i++) {
+    classifier.randomly_initialize();
+    classifier.generate_new_dropout_mask();
+    std::fill(dx.begin(),dx.end(),0.0f);
+    std::cout <<"Dimension "<<i<<"\n";
+    dx[i]=epsilon;
+    int sample=sample_dist(rand);
+    std::cout <<"sample "<<sample<<"\n";
+    classifier.check_grad(dataset.training_images[sample], dataset.training_labels[sample], dx);
+  
+  }
+    
+}
 int main(int argc, char** argv) {
 
 
@@ -522,6 +660,8 @@ int main(int argc, char** argv) {
   ThreeLayerClassifier classifier(10,dataset.rows*dataset.columns);
   classifier.screen=screen;
   classifier.randomly_initialize();
+
+  //  test_gradients(classifier, dataset, 0.000001);
   double output=0;
   arma::vec grad(classifier.weights.size());
 
@@ -556,22 +696,24 @@ int main(int argc, char** argv) {
       //std::cout <<"\nBatch entry "<<batch<<"\n";
       uint32_t sample=uint_dist10(engine);
       SDL_Rect rect = {0,0,28*12,28};
-      //if(batch%50==0) {
+      if(batch%50==0) {
 	SDL_FillRect(screen, &rect, 0);
 	draw_digit(screen, 56+28*dataset.training_labels[sample], 0, dataset.training_images[sample]);
-	//}
-      //std::cout<<"Image "<<sample<<"\n";
+       }
+      std::cout<<"Image "<<sample<<"\n";
       classifier.generate_new_dropout_mask();
-      //classifier.armadilloOutputAndGrad(output,grad, dataset.training_labels[sample],dataset.training_images[sample]);
-      //arma::vec og(grad.size());
-      //double oout;
-       classifier.handCodedOutputAndGrad(output, grad, dataset.training_labels[sample],dataset.training_images[sample]);
-      /*
-      for(int j=0; j<28*28*28*28*2+28*28*10; j++) {
-	if(!AlmostEqual2sComplement(grad[j], og[j], 4)) {
+      classifier.handCodedOutputAndGrad(output,grad, dataset.training_labels[sample],dataset.training_images[sample]);
+      arma::vec og(grad.size());
+      double oout;
+      classifier.getNNOutputAndGrad(oout, og, dataset.training_labels[sample],dataset.training_images[sample]);
+      std::cout <<"COMPAROO "<<output<<", "<<oout<<"\n";
+      for(int j=28*28*28*28*2+7840+784*2; j<28*28*28*28*2+7840+784*2+10; j++) {
+	if(fabs(grad[j]-og[j])>fabs(og[j])*0.00001){
+	//if(!AlmostEqual2sComplement(grad[j], og[j], 4)) {
 	   std::cout <<j<<", "<<"COMPARE "<<grad[j]<<", "<<og[j]<<"\n";
 	}
-	}*/
+	}
+      
       //std::cout <<"Correct answer " << (int)dataset.training_labels[sample] <<"\n";
       //std::cout <<"Output Prob " << output<<"\n";
 

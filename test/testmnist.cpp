@@ -214,7 +214,6 @@ public:
       aweights[i]<<=weights[i];
     }
     getNNOutputs(aweights,aout,inputs);
-    std::cout <<"out "<<aout[correct_label]<<"\n";      		
 
     aout[correct_label] >>=out;
     trace_off();
@@ -267,12 +266,11 @@ public:
 
     arma::vec layer1bgradout(gradout.memptr()+(2*imagesize+numclasses)*imagesize,imagesize,false);
     arma::vec layer2bgradout(gradout.memptr()+(2*imagesize+numclasses+1)*imagesize,imagesize,false);
-    arma::mat layer3bgradout(gradout.memptr()+(2*imagesize+numclasses+2)*imagesize,imagesize,false);
+    arma::vec layer3bgradout(gradout.memptr()+(2*imagesize+numclasses+2)*imagesize,numclasses,false);
     
     arma::vec layer1pre_activation=(layer1weights % layer1mask)*inputs + (layer1biases % layer1bmask);
     arma::vec layer1=tanh(layer1pre_activation/2)/2;
    
-    
     arma::vec layer2pre_activation=(layer2weights % layer2mask)*layer1+ (layer2biases % layer2bmask);
     arma::vec layer2=tanh(layer2pre_activation/2)/2;
 
@@ -289,7 +287,7 @@ public:
     l3grad[correct_label]+=1;
 
     layer3gradout=(l3grad*layer2.t()) % layer3mask;
-    layer3bgradout=l3grad %layer3bmask;
+    layer3bgradout=l3grad % layer3bmask;
 
     arma::vec l2grad=(layer3weights % layer3mask).t() * l3grad;
     arma::vec l2pre_grad=l2grad % activation_derivative(layer2pre_activation);
@@ -392,7 +390,7 @@ public:
     */
 
     out=layer3[correct_label]-logsumout;
- std::cout<<"WUT "<<out<<"\n";      
+
     std::fill(gradout.begin(),gradout.end(),0.0f);
     
     std::vector<double> l3grad(numclasses);
@@ -454,7 +452,7 @@ public:
   void check_grad(std::vector<uint8_t>& image, int correct_label, arma::vec& dx) {
     double val;
     arma::vec grad(weights.size());
-  handCodedOutputAndGrad(val, grad, correct_label, image);
+    armadilloOutputAndGrad(val, grad, correct_label, image);
 
     double expected=arma::dot(grad,dx);
 
@@ -462,7 +460,7 @@ public:
       weights[i]+=dx[i];
     }
     double newval;
-   handCodedOutputAndGrad(newval, grad, correct_label, image);
+    armadilloOutputAndGrad(newval, grad, correct_label, image);
 
 
     double diff=newval-val; 
@@ -636,7 +634,7 @@ void test_gradients(ThreeLayerClassifier& classifier, mnist::MNIST_dataset<>& da
     classifier.check_grad(dataset.training_images[sample], dataset.training_labels[sample], dx);
   }
 
-  for(unsigned int i=28*28*28*28*2+7840*2; i<classifier.weights.size(); i++) {
+  for(unsigned int i=28*28*28*28*2+7840+784*2; i<classifier.weights.size(); i++) {
     classifier.randomly_initialize();
     classifier.generate_new_dropout_mask();
     std::fill(dx.begin(),dx.end(),0.0f);
@@ -661,7 +659,8 @@ int main(int argc, char** argv) {
   classifier.screen=screen;
   classifier.randomly_initialize();
 
-  //  test_gradients(classifier, dataset, 0.000001);
+  //   test_gradients(classifier, dataset, 0.000001);
+
   double output=0;
   arma::vec grad(classifier.weights.size());
 
